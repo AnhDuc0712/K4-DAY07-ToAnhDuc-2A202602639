@@ -121,6 +121,45 @@ class RecursiveChunker:
         ]
 
 
+class HeadingSectionChunker:
+    """Split Markdown by headings, recursively splitting long sections."""
+
+    HEADING_PATTERN = re.compile(r"^#{1,6}\s+.+$", re.MULTILINE)
+
+    def __init__(self, chunk_size: int = 500) -> None:
+        self.chunk_size = chunk_size
+        self._recursive = RecursiveChunker(chunk_size=chunk_size)
+
+    def chunk(self, text: str) -> list[str]:
+        if not text or not text.strip():
+            return []
+
+        headings = list(self.HEADING_PATTERN.finditer(text))
+        if not headings:
+            return self._recursive.chunk(text)
+
+        sections: list[str] = []
+        if headings[0].start() > 0 and text[: headings[0].start()].strip():
+            sections.append(text[: headings[0].start()].strip())
+
+        for index, heading in enumerate(headings):
+            end = headings[index + 1].start() if index + 1 < len(headings) else len(text)
+            section = text[heading.start() : end].strip()
+            sections.extend(self._split_section(section, heading.group().strip()))
+        return sections
+
+    def _split_section(self, section: str, heading: str) -> list[str]:
+        if len(section) <= self.chunk_size:
+            return [section]
+
+        body = section[len(heading) :].strip()
+        if not body:
+            return self._recursive.chunk(section)
+        body_chunk_size = max(1, self.chunk_size - len(heading) - 2)
+        recursive = RecursiveChunker(chunk_size=body_chunk_size)
+        return [f"{heading}\n\n{chunk}" for chunk in recursive.chunk(body)]
+
+
 def _dot(a: list[float], b: list[float]) -> float:
     return sum(x * y for x, y in zip(a, b))
 

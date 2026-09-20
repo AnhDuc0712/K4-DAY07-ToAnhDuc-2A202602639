@@ -69,7 +69,7 @@ PY
 
 ```bash
 pip install openai
-export OPENAI_API_KEY=your-key-here
+export OPENAI_API_KEY=xx
 python3 - <<'PY'
 from src import OpenAIEmbedder
 embedder = OpenAIEmbedder()

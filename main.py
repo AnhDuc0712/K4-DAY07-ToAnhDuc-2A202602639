@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import socket
 import os
 import sys
 from pathlib import Path
@@ -20,7 +21,32 @@ from src.embeddings import (
 from src.models import Document
 from src.store import EmbeddingStore
 
+_ORIGINAL_GETADDRINFO = socket.getaddrinfo
 
+
+def _use_ipv4_for_deepseek(
+    host: str,
+    port: int,
+    family: int = 0,
+    type: int = 0,
+    proto: int = 0,
+    flags: int = 0,
+):
+    """Force IPv4 for DeepSeek because IPv6 is reset on the current network."""
+    if str(host).lower() == "api.deepseek.com":
+        family = socket.AF_INET
+
+    return _ORIGINAL_GETADDRINFO(
+        host,
+        port,
+        family,
+        type,
+        proto,
+        flags,
+    )
+
+
+socket.getaddrinfo = _use_ipv4_for_deepseek
 def _configure_console_encoding() -> None:
     """Keep the Windows manual demo able to print Vietnamese text."""
     if hasattr(sys.stdout, "reconfigure"):
@@ -71,6 +97,38 @@ def demo_llm(prompt: str) -> str:
     return f"[DEMO LLM] Generated answer from prompt preview: {preview}..."
 
 
+def deepseek_llm(prompt: str) -> str:
+    """Generate an answer using the DeepSeek Chat API."""
+    from openai import OpenAI
+
+    api_key = (os.getenv("DEEPSEEK_API_KEY") or "").strip()
+    if not api_key:
+        raise RuntimeError("Missing DEEPSEEK_API_KEY in .env")
+
+    client = OpenAI(
+        api_key=api_key,
+        base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").strip(),
+        timeout=60.0,
+        max_retries=2,
+    )
+
+    response = client.chat.completions.create(
+        model=os.getenv("DEEPSEEK_MODEL", "deepseek-flash").strip(),
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Chỉ trả lời dựa trên context được cung cấp. "
+                    "Nếu context không đủ, hãy nói rõ không tìm thấy thông tin."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ],
+        stream=False,
+    )
+    return response.choices[0].message.content or ""
+
+
 def run_manual_demo(question: str | None = None, sample_files: list[str] | None = None) -> int:
     files = sample_files or SAMPLE_FILES
     query = question or "Summarize the key information from the loaded files."
@@ -93,7 +151,13 @@ def run_manual_demo(question: str | None = None, sample_files: list[str] | None 
         print(f"  - {doc.id}: {doc.metadata['source']}")
 
     load_dotenv(override=False)
-    provider = os.getenv(EMBEDDING_PROVIDER_ENV, "mock").strip().lower()
+    if os.getenv("DEEPSEEK_API_KEY"):
+        default_provider = "local"
+    elif os.getenv("OPENAI_API_KEY"):
+        default_provider = "openai"
+    else:
+        default_provider = "mock"
+    provider = os.getenv(EMBEDDING_PROVIDER_ENV, default_provider).strip().lower()
     if provider == "local":
         try:
             embedder = LocalEmbedder(model_name=os.getenv("LOCAL_EMBEDDING_MODEL", LOCAL_EMBEDDING_MODEL))
@@ -126,7 +190,17 @@ def run_manual_demo(question: str | None = None, sample_files: list[str] | None 
         print(f"   content preview: {result['content'][:120].replace(chr(10), ' ')}...")
 
     print("\n=== KnowledgeBaseAgent Test ===")
-    agent = KnowledgeBaseAgent(store=store, llm_fn=demo_llm)
+    llm_provider = os.getenv(
+        "LLM_PROVIDER",
+        "deepseek" if os.getenv("DEEPSEEK_API_KEY") else "openai",
+    ).strip().lower()
+    use_real_llm = (
+        (llm_provider == "deepseek" and bool(os.getenv("DEEPSEEK_API_KEY")))
+        or (llm_provider == "openai" and bool(os.getenv("OPENAI_API_KEY")))
+    )
+    llm_fn = deepseek_llm if use_real_llm else demo_llm
+    print(f"LLM backend: {llm_provider if use_real_llm else 'demo'}")
+    agent = KnowledgeBaseAgent(store=store, llm_fn=llm_fn)
     print(f"Question: {query}")
     print("Agent answer:")
     print(agent.answer(query, top_k=3))
