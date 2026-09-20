@@ -20,6 +20,13 @@ from src.embeddings import (
 from src.models import Document
 from src.store import EmbeddingStore
 
+
+def _configure_console_encoding() -> None:
+    """Keep the Windows manual demo able to print Vietnamese text."""
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+
+
 SAMPLE_FILES = [
     "data/python_intro.txt",
     "data/vector_store_notes.md",
@@ -127,6 +134,7 @@ def run_manual_demo(question: str | None = None, sample_files: list[str] | None 
 
 
 def main() -> int:
+    _configure_console_encoding()
     question = " ".join(sys.argv[1:]).strip() if len(sys.argv) > 1 else None
     return run_manual_demo(question=question)
 
